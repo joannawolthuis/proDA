@@ -3,9 +3,9 @@
 
 #' proDA: Identify differentially abundant proteins in label-free mass spectrometry
 #'
-#' Account for missing values in label-free mass spectrometry data 
+#' Account for missing values in label-free mass spectrometry data
 #' without imputation. The package implements a probabilistic dropout model that
-#' ensures that the information from observed and missing values are properly 
+#' ensures that the information from observed and missing values are properly
 #' combined. It adds empirical Bayesian priors to increase power to detect
 #' differentially abundant proteins.
 #'
@@ -156,7 +156,9 @@ proDA <- function(data, design=~ 1,
                   n_subsample = nrow(data),
                   max_iter = 20,
                   epsilon = 1e-3,
-                  verbose=FALSE, ...){
+                  verbose=FALSE,
+                  cl=0,
+                  ...){
 
 
   # Validate Data
@@ -209,7 +211,7 @@ proDA <- function(data, design=~ 1,
     if(any(! is.na(data) & data == 0)){
       if(any(is.na(data))){
         warning(paste0("The data contains a mix of ", sum(! is.na(data) & data == 0) ," exact zeros ",
-                       "and ", sum(is.na(data)), " NA's. Will treat the zeros as valid input and not replace them with NA's."))        
+                       "and ", sum(is.na(data)), " NA's. Will treat the zeros as valid input and not replace them with NA's."))
       }else{
         warning(paste0("The data contains ", sum(! is.na(data) & data == 0) ," exact zeros and no NA's.",
                        "Replacing all exact zeros with NA's."))
@@ -224,13 +226,13 @@ proDA <- function(data, design=~ 1,
     if(any(! is.na(assay(data)) & assay(data) == 0)){
       if(any(is.na(assay(data)))){
         warning(paste0("The data contains a mix of ", sum(! is.na(assay(data)) & assay(data) == 0) ," exact zeros ",
-                       "and ", sum(is.na(assay(data))), " NA's. Will treat the zeros as valid input and not replace them with NA's."))        
+                       "and ", sum(is.na(assay(data))), " NA's. Will treat the zeros as valid input and not replace them with NA's."))
       }else{
         warning(paste0("The data contains ", sum(! is.na(assay(data)) & assay(data) == 0) ," exact zeros and no NA's.",
                        "Replacing all exact zeros with NA's."))
         assay(data)[! is.na(assay(data)) & assay(data) == 0] <- NA
       }
-      
+
     }
     if(! data_is_log_transformed){
       assay(data) <- log2(assay(data))
@@ -251,7 +253,8 @@ proDA <- function(data, design=~ 1,
                                     moderate_variance = moderate_variance,
                                     max_iter = max_iter,
                                     epsilon = epsilon,
-                                    verbose = verbose)
+                                    verbose = verbose,
+                                    cl = cl)
 
   feat_df <- as.data.frame(mply_dbl(fit_result$feature_parameters, function(f){
     unlist(f[-c(1,2)])
@@ -307,22 +310,42 @@ proDA <- function(data, design=~ 1,
 
 fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
                                 moderate_location, moderate_variance,
-                                max_iter, epsilon, verbose=FALSE){
+                                max_iter, epsilon, verbose=FALSE, cl=cl, use_slurm=F){
   if(verbose){
     message("Fitting the hyper-parameters for the probabilistic dropout model.")
   }
   # Initialization
   n_samples <- ncol(Y)
-
-
   Y_compl <- Y
   Y_compl[is.na(Y)] <- rnorm(sum(is.na(Y)), mean=quantile(Y, probs=0.1, na.rm=TRUE), sd=sd(Y,na.rm=TRUE)/5)
-  res_init <- lapply(seq_len(nrow(Y)), function(i){
-    pd_lm.fit(Y_compl[i, ], model_matrix,
-              dropout_curve_position = rep(NA, n_samples),
-              dropout_curve_scale =rep(NA, n_samples),
-              verbose=verbose)
-  })
+
+  if(!is.null(cl)){
+    parallel::clusterEvalQ(cl,{
+      library(proDA)
+      })
+    parallel::clusterExport(cl, unclass(lsf.str(envir = asNamespace("proDA"),
+                                                all = T)),
+                            envir = as.environment(asNamespace("proDA")))
+    chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE))
+    #blocks = chunk(1:nrow(Y), n = length(cl) * 10)
+    blocks = parallel::splitIndices(nrow(Y), ncl = ceiling(length(cl) * 5))
+    res_init <- unlist(pbapply::pblapply(blocks, cl=cl, function(block){
+      lapply(block, function(i){
+        pd_lm.fit(Y_compl[i, ], model_matrix,
+                  dropout_curve_position = rep(NA, n_samples),
+                  dropout_curve_scale =rep(NA, n_samples),
+                  verbose = verbose)
+      })
+    }), recursive=F)
+  }else{
+    res_init <- pbapply::pblapply(seq_len(nrow(Y)), cl=NULL, function(i){
+      pd_lm.fit(Y_compl[i, ], model_matrix,
+                dropout_curve_position = rep(NA, n_samples),
+                dropout_curve_scale =rep(NA, n_samples),
+                verbose = verbose)
+    })
+  }
+
   Pred_init <- msply_dbl(res_init, function(x) x$coefficients) %*% t(model_matrix)
   Pred_init_var <- mply_dbl(seq_len(nrow(Y)), function(i){
     vapply(seq_len(nrow(model_matrix)), function(j)
@@ -361,25 +384,49 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
   error <- NA
   res_reg <- res_init
   res_unreg <- res_init
+
   while(! converged && iter <= max_iter){
     if(verbose){
       message(paste0("Starting iter: ", iter))
     }
 
-    res_unreg <- lapply(seq_len(nrow(Y)), function(i){
-      pd_lm.fit(Y[i, ], model_matrix,
-                dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
-                verbose=verbose)
-    })
-    if(moderate_location || moderate_variance){
-      res_reg <- lapply(seq_len(nrow(Y)), function(i){
+    if(!is.null(cl)){
+      res_unreg <- unlist(pbapply::pblapply(blocks, cl=cl, function(block){
+        lapply(block, function(i){
         pd_lm.fit(Y[i, ], model_matrix,
                   dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
-                  location_prior_mean = mu0, location_prior_scale = sigma20,
-                  variance_prior_scale = tau20, variance_prior_df = 1/df0_inv,
-                  location_prior_df = location_prior_df,
+                  verbose=verbose)
+          })
+      }),recursive = F)
+    }else{
+      res_unreg <- pbapply::pblapply(seq_len(nrow(Y)), function(i){
+        pd_lm.fit(Y[i, ], model_matrix,
+                  dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
                   verbose=verbose)
       })
+      }
+
+    if(moderate_location || moderate_variance){
+      if(!is.null(cl)){
+        res_reg <- unlist(pbapply::pblapply(blocks, cl=cl, function(block){
+          lapply(block, function(i){
+            pd_lm.fit(Y[i, ], model_matrix,
+                      dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
+                      location_prior_mean = mu0, location_prior_scale = sigma20,
+                      variance_prior_scale = tau20, variance_prior_df = 1/df0_inv,
+                      location_prior_df = location_prior_df,
+                      verbose=verbose)
+          })}), recursive=F)
+      }else{
+        res_reg <- pbapply::pblapply(seq_len(nrow(Y)), function(i){
+            pd_lm.fit(Y[i, ], model_matrix,
+                      dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
+                      location_prior_mean = mu0, location_prior_scale = sigma20,
+                      variance_prior_scale = tau20, variance_prior_df = 1/df0_inv,
+                      location_prior_df = location_prior_df,
+                      verbose=verbose)
+          })
+      }
     }else{
       res_reg <- res_unreg
     }

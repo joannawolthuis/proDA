@@ -1,7 +1,6 @@
-
-
-
-
+#' Scale data table
+#'
+#' @export
 dt.scaled <- function(x, df, mean=0, sd=1, log=FALSE){
   res <- dt((x-mean)/sd, df=df, log=log)
   if(log){
@@ -11,12 +10,12 @@ dt.scaled <- function(x, df, mean=0, sd=1, log=FALSE){
   }
 }
 
-
+#' Inverse Mills ratio
+#'
+#' @export
 inv_mills_ratio <- function(x, mu, sd){
   sign(sd) * exp(dnorm(x, mu, abs(sd), log=TRUE) - invprobit(x, mu, sd, log=TRUE))
 }
-
-
 
 #' Inverse probit function
 #'
