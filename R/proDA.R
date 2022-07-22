@@ -318,14 +318,20 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
   n_samples <- ncol(Y)
   Y_compl <- Y
   Y_compl[is.na(Y)] <- rnorm(sum(is.na(Y)), mean=quantile(Y, probs=0.1, na.rm=TRUE), sd=sd(Y,na.rm=TRUE)/5)
+  env_for_cl = environment()
+  env_for_cl$Y_compl_path <- tempfile()
 
   if(!is.null(cl)){
+    print(Y_compl_path)
+    qs::qsave(Y_compl, file = Y_compl_path)
+    parallel::clusterExport(cl, list("Y_compl_path"), envir = env_for_cl)
     parallel::clusterEvalQ(cl,{
       library(proDA)
-      })
-    parallel::clusterExport(cl, unclass(lsf.str(envir = asNamespace("proDA"),
-                                                all = T)),
-                            envir = as.environment(asNamespace("proDA")))
+      Y_compl <- qs::qread(Y_compl_path)
+    })
+    #parallel::clusterExport(cl, unclass(lsf.str(envir = asNamespace("proDA"),
+    #                                            all = T)),
+    #                        envir = as.environment(asNamespace("proDA")))
     chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE))
     #blocks = chunk(1:nrow(Y), n = length(cl) * 10)
     blocks = parallel::splitIndices(nrow(Y), ncl = ceiling(length(cl) * 5))
