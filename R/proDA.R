@@ -158,6 +158,7 @@ proDA <- function(data, design=~ 1,
                   epsilon = 1e-3,
                   verbose=FALSE,
                   cl=0,
+                  use_slurm=F
                   ...){
 
 
@@ -254,7 +255,7 @@ proDA <- function(data, design=~ 1,
                                     max_iter = max_iter,
                                     epsilon = epsilon,
                                     verbose = verbose,
-                                    cl = cl)
+                                    cl = cl, use_slurm=use_slurm)
 
   feat_df <- as.data.frame(mply_dbl(fit_result$feature_parameters, function(f){
     unlist(f[-c(1,2)])
@@ -322,27 +323,38 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
   env_for_cl$Y_compl_path <- tempfile()
 
   if(!is.null(cl)){
+    
     print(Y_compl_path)
+    
     qs::qsave(Y_compl, file = Y_compl_path)
-    parallel::clusterExport(cl, list("Y_compl_path"), envir = env_for_cl)
-    parallel::clusterEvalQ(cl,{
-      library(proDA)
-      Y_compl <- qs::qread(Y_compl_path)
-    })
-    #parallel::clusterExport(cl, unclass(lsf.str(envir = asNamespace("proDA"),
-    #                                            all = T)),
-    #                        envir = as.environment(asNamespace("proDA")))
     chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE))
-    #blocks = chunk(1:nrow(Y), n = length(cl) * 10)
-    blocks = parallel::splitIndices(nrow(Y), ncl = ceiling(length(cl) * 5))
-    res_init <- unlist(pbapply::pblapply(blocks, cl=cl, function(block){
-      lapply(block, function(i){
+    
+    if(use_slurm){
+      res_init <- rslurm::slurm_apply(f = function(i){
         pd_lm.fit(Y_compl[i, ], model_matrix,
                   dropout_curve_position = rep(NA, n_samples),
                   dropout_curve_scale =rep(NA, n_samples),
                   verbose = verbose)
+      },
+      params = data.frame(i = 1:nrow(Y_compl)), 
+      global_objects = x("Y_compl", "model_matrix", "n_samples", "pd_lm.fit"),
+      pkgs = "proDA",nodes = 500)
+    }else{
+      parallel::clusterExport(cl, list("Y_compl_path"), envir = env_for_cl)
+      parallel::clusterEvalQ(cl,{
+        library(proDA)
+        Y_compl <- qs::qread(Y_compl_path)
       })
-    }), recursive=F)
+      blocks = parallel::splitIndices(nrow(Y), ncl = ceiling(length(cl) * 5))
+      res_init <- unlist(pbapply::pblapply(blocks, cl=cl, function(block){
+        lapply(block, function(i){
+          pd_lm.fit(Y_compl[i, ], model_matrix,
+                    dropout_curve_position = rep(NA, n_samples),
+                    dropout_curve_scale =rep(NA, n_samples),
+                    verbose = verbose)
+        })
+      }), recursive=F)  
+    }
   }else{
     res_init <- pbapply::pblapply(seq_len(nrow(Y)), cl=NULL, function(i){
       pd_lm.fit(Y_compl[i, ], model_matrix,
@@ -404,13 +416,22 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
                   verbose=verbose)
           })
       }),recursive = F)
-    }else{
+    }else if(!use_slurm){
       res_unreg <- pbapply::pblapply(seq_len(nrow(Y)), function(i){
         pd_lm.fit(Y[i, ], model_matrix,
                   dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
                   verbose=verbose)
       })
-      }
+    }else{
+      res_unreg <- rslurm::slurm_apply(f = function(i){
+        pd_lm.fit(Y[i, ], model_matrix,
+                  dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
+                  verbose=verbose)
+      },
+      params = data.frame(i = 1:nrow(Y)), 
+      global_objects = x("Y", "model_matrix", "verbose", "pd_lm.fit"),
+      pkgs = "proDA",nodes = 500)
+    }
 
     if(moderate_location || moderate_variance){
       if(!is.null(cl)){
@@ -423,7 +444,7 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
                       location_prior_df = location_prior_df,
                       verbose=verbose)
           })}), recursive=F)
-      }else{
+      }else if(!use_slurm){
         res_reg <- pbapply::pblapply(seq_len(nrow(Y)), function(i){
             pd_lm.fit(Y[i, ], model_matrix,
                       dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
@@ -432,6 +453,19 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
                       location_prior_df = location_prior_df,
                       verbose=verbose)
           })
+      }else{
+        res_reg <- rslurm::slurm_apply(f = function(i){
+          pd_lm.fit(Y[i, ], model_matrix,
+                    dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
+                    location_prior_mean = mu0, location_prior_scale = sigma20,
+                    variance_prior_scale = tau20, variance_prior_df = 1/df0_inv,
+                    location_prior_df = location_prior_df,
+                    verbose=verbose)
+        },
+        params = data.frame(i = 1:nrow(Y)), 
+        global_objects = x("Y", "model_matrix", "verbose", "pd_lm.fit", 
+                           "location_prior_df", "tau20", "mu0","sigma20", 
+        pkgs = "proDA",nodes = 500)
       }
     }else{
       res_reg <- res_unreg
