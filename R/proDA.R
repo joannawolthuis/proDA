@@ -464,7 +464,7 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
         },
         params = data.frame(i = 1:nrow(Y)), 
         global_objects = x("Y", "model_matrix", "verbose", "pd_lm.fit", 
-                           "location_prior_df", "tau20", "mu0","sigma20", 
+                           "location_prior_df", "tau20", "mu0","sigma20"), 
         pkgs = "proDA",nodes = 500)
       }
     }else{
