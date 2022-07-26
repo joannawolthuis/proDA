@@ -329,32 +329,31 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
     qs::qsave(Y_compl, file = Y_compl_path)
     chunk <- function(x,n) split(x, cut(seq_along(x), n, labels = FALSE))
     
-    if(use_slurm){
-      res_init <- rslurm::slurm_apply(f = function(i){
+    parallel::clusterExport(cl, list("Y_compl_path"), envir = env_for_cl)
+    parallel::clusterEvalQ(cl,{
+      library(proDA)
+      Y_compl <- qs::qread(Y_compl_path)
+    })
+    blocks = parallel::splitIndices(nrow(Y), ncl = ceiling(length(cl) * 5))
+    res_init <- unlist(pbapply::pblapply(blocks, cl=cl, function(block){
+      lapply(block, function(i){
         pd_lm.fit(Y_compl[i, ], model_matrix,
                   dropout_curve_position = rep(NA, n_samples),
                   dropout_curve_scale =rep(NA, n_samples),
                   verbose = verbose)
-      },
-      params = data.frame(i = 1:nrow(Y_compl)), 
-      global_objects = x("Y_compl", "model_matrix", "n_samples", "pd_lm.fit"),
-      pkgs = "proDA",nodes = 500)
-    }else{
-      parallel::clusterExport(cl, list("Y_compl_path"), envir = env_for_cl)
-      parallel::clusterEvalQ(cl,{
-        library(proDA)
-        Y_compl <- qs::qread(Y_compl_path)
       })
-      blocks = parallel::splitIndices(nrow(Y), ncl = ceiling(length(cl) * 5))
-      res_init <- unlist(pbapply::pblapply(blocks, cl=cl, function(block){
-        lapply(block, function(i){
-          pd_lm.fit(Y_compl[i, ], model_matrix,
-                    dropout_curve_position = rep(NA, n_samples),
-                    dropout_curve_scale =rep(NA, n_samples),
-                    verbose = verbose)
-        })
-      }), recursive=F)  
-    }
+    }), recursive=F)  
+    
+  }else if(use_slurm){
+    res_init <- rslurm::slurm_apply(f = function(i){
+      pd_lm.fit(Y_compl[i, ], model_matrix,
+                dropout_curve_position = rep(NA, n_samples),
+                dropout_curve_scale =rep(NA, n_samples),
+                verbose = verbose)
+    },
+    params = data.frame(i = 1:nrow(Y_compl)), 
+    global_objects = x("Y_compl", "model_matrix", "n_samples", "pd_lm.fit"),
+    pkgs = "proDA",nodes = 500)
   }else{
     res_init <- pbapply::pblapply(seq_len(nrow(Y)), cl=NULL, function(i){
       pd_lm.fit(Y_compl[i, ], model_matrix,
