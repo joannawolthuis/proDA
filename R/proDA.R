@@ -158,7 +158,7 @@ proDA <- function(data, design=~ 1,
                   epsilon = 1e-3,
                   verbose=FALSE,
                   cl=0,
-                  use_slurm=F
+                  use_slurm=F,
                   ...){
 
 
