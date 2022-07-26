@@ -345,6 +345,7 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
     }), recursive=F)  
     
   }else if(use_slurm){
+    print("using slurm")
     res_init <- rslurm::slurm_apply(f = function(i){
       pd_lm.fit(Y_compl[i, ], model_matrix,
                 dropout_curve_position = rep(NA, n_samples),
@@ -352,7 +353,7 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
                 verbose = verbose)
     },
     params = data.frame(i = 1:nrow(Y_compl)), 
-    global_objects = x("Y_compl", "model_matrix", "n_samples", "pd_lm.fit"),
+    global_objects = c("Y_compl", "model_matrix", "n_samples"),
     pkgs = "proDA",nodes = 500)
   }else{
     res_init <- pbapply::pblapply(seq_len(nrow(Y)), cl=NULL, function(i){
@@ -427,8 +428,8 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
                   dropout_curve_position = rho, dropout_curve_scale = 1/zetainv,
                   verbose=verbose)
       },
-      params = data.frame(i = 1:nrow(Y)), 
-      global_objects = x("Y", "model_matrix", "verbose", "pd_lm.fit"),
+      params = data.frame(i = 1:nrow(Y)),
+      global_objects = c("Y", "model_matrix", "verbose"),
       pkgs = "proDA",nodes = 500)
     }
 
@@ -462,7 +463,7 @@ fit_parameters_loop <- function(Y, model_matrix, location_prior_df,
                     verbose=verbose)
         },
         params = data.frame(i = 1:nrow(Y)), 
-        global_objects = x("Y", "model_matrix", "verbose", "pd_lm.fit", 
+        global_objects = c("Y", "model_matrix", "verbose",  
                            "location_prior_df", "tau20", "mu0","sigma20"), 
         pkgs = "proDA",nodes = 500)
       }
