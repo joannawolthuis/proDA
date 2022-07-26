@@ -33,7 +33,7 @@
 #'   mat
 #'   proDA:::msply_dbl(mat, function(i) rep(i, each=2))
 #'
-#'
+#' @export
 #' @keywords internal
 mply_dbl <- function(x, FUN, ncol=1, ...){
   if(is.vector(x)){
@@ -58,7 +58,7 @@ mply_dbl <- function(x, FUN, ncol=1, ...){
     t(res)
   }
 }
-
+#' @export
 #' @describeIn mply_dbl flexible version that automatically infers the number
 #'   of columns
 msply_dbl <- function(x, FUN, ...){
